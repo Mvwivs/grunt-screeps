@@ -13,6 +13,8 @@ var path = require('path'),
     https = require('https'),
     util = require('util');
 
+const fetch = require('node-fetch');
+
 module.exports = function (grunt) {
 
     grunt.registerMultiTask('screeps', 'A Grunt plugin for commiting code to your Screeps account', function () {
@@ -42,72 +44,61 @@ module.exports = function (grunt) {
             }).map(function (filepath) {
                 var basename = path.basename(filepath),
                     ext = path.extname(basename),
-                    name = basename.replace(ext,'');
+                    name = basename.replace(ext, '');
 
-                if(ext === '.js') {
-                    modules[name] = grunt.file.read(filepath, {encoding: 'utf8'});
+                if (ext === '.js') {
+                    modules[name] = grunt.file.read(filepath, { encoding: 'utf8' });
                 }
                 else {
-                    modules[name] = {binary: grunt.file.read(filepath, {encoding: null}).toString('base64')};
+                    modules[name] = { binary: grunt.file.read(filepath, { encoding: null }).toString('base64') };
                 }
             });
 
-            var proto = server.http ? http : https,
-                req = proto.request({
-                hostname: server.host || 'screeps.com',
-                port: server.port || (server.http ? 80 : 443),
-                path: options.ptr ? '/ptr/api/user/code' : '/api/user/code',
-                method: 'POST',
-                auth: options.email + ':' + options.password,
-                headers: {
-                    'Content-Type': 'application/json; charset=utf-8'
-                }
-            }, function(res) {
-                res.setEncoding('utf8');
+            (async () => {
+                try {
+                    let hexId = BigInt(options.steam_id).toString(16);
+                    const byte1 = hexId.substr(hexId.length - 2, 2);
+                    const byte2 = hexId.substr(hexId.length - 4, 2);
+                    const byte3 = hexId.substr(hexId.length - 6, 2);
+                    const byte4 = hexId.substr(hexId.length - 8, 2);
 
-                var data = '';
+                    const response = await fetch(`http://${server.host}:${server.port}/api/auth/steam-ticket`, {
+                        method: 'POST',
+                        headers: {
+                            'Accept': 'application/json',
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({ ticket: `----++++----++++----++++${byte1}${byte2}${byte3}${byte4}------------------` })
+                    });
+                    let json = await response.json();
+                    let token = json.token;
+                    // console.log(token);
 
-                if(res.statusCode < 200 || res.statusCode >= 300) {
-                  grunt.fail.fatal('Screeps server returned error code ' + res.statusCode);
-                }
-
-                res.on('data', function(chunk) {
-                    data += chunk;
-                });
-
-                res.on('end', function() {
-                    var serverText = server && server.host || 'Screeps';
-                    try {
-                      var parsed = JSON.parse(data);
-                      serverText = server && server.host || 'Screeps';
-                      if(parsed.ok) {
-                          var msg = 'Committed to ' + serverText + ' account "' + options.email + '"';
-                          if(options.branch) {
-                              msg += ' branch "' + options.branch+'"';
-                          }
-                          if(options.ptr) {
-                              msg += ' [PTR]';
-                          }
-                          msg += '.';
-                          grunt.log.writeln(msg);
-                      }
-                      else {
-                          grunt.log.error('Error while committing to ' + serverText + ': '+util.inspect(parsed));
-                      }
-                    } catch (e) {
-                      grunt.log.error('Error while processing ' + serverText + ' json: '+e.message);
+                    var postData = {modules: modules};
+                    if(options.branch) {
+                        postData.branch = options.branch;
                     }
-                    done();
-                });
-            });
+                    const postCodeResponse = await fetch(`http://${server.host}:${server.port}/api/user/code`, {
+                        method: 'POST',
+                        headers: {
+                            'Accept': 'application/json',
+                            'Content-Type': 'application/json',
+                            'x-token': token,
+                            'x-username': "undefined"
+                        },
+                        body: JSON.stringify(postData)
+                    });
+                    let postCodeResponseResult = await postCodeResponse.json();
+                    if (postCodeResponseResult.ok != 1) {
+                        throw "Code post returned not ok. " + postCodeResponseResult; 
+                    }
+                    // console.log(postCodeResponseResult);
+                }
+                catch (error) {
+                    grunt.fail.fatal('Error: ' + error);
+                }
 
-            var postData = {modules: modules};
-            if(options.branch) {
-                postData.branch = options.branch;
-            }
-            req.write(JSON.stringify(postData));
-            req.end();
+            })(); 
         });
     });
-
 };
